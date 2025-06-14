@@ -3,23 +3,38 @@ import json
 import subprocess
 import sys
 
-try:
-    import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    import gradio as gr
-except ImportError:
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "transformers", "torch", "gradio"]
-    )
-    import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    import gradio as gr
+
+def ensure_packages():
+    """Import required packages or attempt installation."""
+    try:
+        import torch  # noqa: F401
+        from transformers import AutoTokenizer, AutoModelForCausalLM  # noqa: F401
+        import gradio as gr  # noqa: F401
+        return torch, AutoTokenizer, AutoModelForCausalLM, gr
+    except ImportError:
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "transformers", "torch", "gradio"]
+            )
+            import torch  # noqa: F401
+            from transformers import AutoTokenizer, AutoModelForCausalLM  # noqa: F401
+            import gradio as gr  # noqa: F401
+            return torch, AutoTokenizer, AutoModelForCausalLM, gr
+        except Exception:
+            print(
+                "Failed to install dependencies. Please install 'transformers', 'torch', and 'gradio'."
+            )
+            raise
+
+
+torch, AutoTokenizer, AutoModelForCausalLM, gr = ensure_packages()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-MODEL_PATH = "ghost-core-lora"
+MODEL_PATH = os.environ.get("MODEL_PATH", "ghost-core-lora")
 USER_FILE = "user_data.json"
+HISTORY_FILE = "chat_history.json"
 MAX_FREE_TURNS = 5
 PREMIUM_CODE = "TENCEPRO2025"
 
@@ -32,11 +47,25 @@ else:
 
 use_count = user_data.get("use_count", 0)
 
+chat_history = load_history()
+
 
 def save_user_data():
     user_data["use_count"] = use_count
     with open(USER_FILE, "w") as f:
         json.dump(user_data, f)
+
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+
+def save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f)
 
 
 def load_model():
@@ -50,7 +79,7 @@ tokenizer, model = load_model()
 
 
 def chat(message, code, history, depth):
-    global use_count
+    global use_count, chat_history
     if code and code.strip() == PREMIUM_CODE:
         user_data["premium"] = True
         save_user_data()
@@ -72,6 +101,8 @@ def chat(message, code, history, depth):
     if "Assistant:" in response:
         response = response.split("Assistant:")[-1].strip()
     history.append((message, response))
+    chat_history = history
+    save_history(chat_history)
     save_user_data()
     return history, "", code, history
 
@@ -79,7 +110,7 @@ def chat(message, code, history, depth):
 def main():
     with gr.Blocks() as demo:
         gr.Markdown("# Tence AI")
-        state = gr.State([])
+        state = gr.State(chat_history)
         chatbot = gr.Chatbot()
         with gr.Row():
             txt = gr.Textbox(label="Question", placeholder="Ask anything")
